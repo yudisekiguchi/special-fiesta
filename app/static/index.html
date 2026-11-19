@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Busca Segura</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1c1f24; --muted:#66707d; --border:#e1e4e8;
+          --green:#1a7f37; --yellow:#9a6700; --red:#cf222e; --accent:#0969da; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0d1117; --card:#161b22; --text:#e6edf3; --muted:#8d96a0; --border:#30363d;
+            --green:#3fb950; --yellow:#d29922; --red:#f85149; --accent:#4493f8; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui, Ubuntu, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:1000px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  form { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px; }
+  input[type=search] { flex:1 1 280px; padding:10px 12px; font-size:16px; border:1px solid var(--border);
+                       border-radius:8px; background:var(--card); color:var(--text); }
+  select, button { padding:10px 12px; font-size:15px; border-radius:8px; border:1px solid var(--border);
+                   background:var(--card); color:var(--text); }
+  button { background:var(--accent); color:#fff; border-color:var(--accent); cursor:pointer; }
+  .opts { display:flex; flex-wrap:wrap; gap:14px; color:var(--muted); font-size:14px; margin-bottom:16px; }
+  .status { color:var(--muted); margin:8px 0 16px; }
+  .err { color:var(--red); font-size:14px; }
+  .card { background:var(--card); border:1px solid var(--border); border-left:5px solid var(--border);
+          border-radius:8px; padding:12px 14px; margin-bottom:10px; }
+  .card.green { border-left-color:var(--green); } .card.yellow { border-left-color:var(--yellow); }
+  .card.red { border-left-color:var(--red); opacity:.85; }
+  .top { display:flex; gap:10px; align-items:flex-start; }
+  .badge { flex:none; font-weight:600; font-size:13px; padding:2px 8px; border-radius:999px; color:#fff; }
+  .badge.green { background:var(--green); } .badge.yellow { background:var(--yellow); } .badge.red { background:var(--red); }
+  .title { font-weight:600; word-break:break-word; }
+  .meta { color:var(--muted); font-size:13px; margin-top:4px; display:flex; flex-wrap:wrap; gap:4px 14px; }
+  details { margin-top:8px; font-size:14px; }
+  summary { cursor:pointer; color:var(--muted); }
+  ul.reasons { margin:6px 0 0; padding-left:18px; }
+  .good { color:var(--green); } .warn { color:var(--yellow); } .danger { color:var(--red); font-weight:600; }
+  .info { color:var(--muted); }
+  .actions { margin-top:8px; display:flex; gap:12px; flex-wrap:wrap; font-size:14px; }
+  .actions a { color:var(--accent); }
+  .files { max-height:180px; overflow:auto; font-family:ui-monospace, monospace; font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Busca Segura de Torrents</h1>
+  <p class="sub">Música, vídeo e imagens, com uma nota de confiança para cada resultado. A nota é uma estimativa: passe o antivírus no que baixar.</p>
+
+  <form id="f">
+    <input type="search" id="q" placeholder="Ex.: Beethoven sinfonia 9" required minlength="2" autofocus>
+    <select id="media">
+      <option value="">Todos os tipos</option>
+      <option value="audio">Música</option>
+      <option value="video">Vídeo</option>
+      <option value="image">Imagens</option>
+    </select>
+    <button>Buscar</button>
+  </form>
+  <div class="opts" id="opts"></div>
+  <div class="status" id="status"></div>
+  <div id="results"></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const LABEL = { green: "Confiável", yellow: "Atenção", red: "Evitar" };
+const MEDIA = { audio: "Música", video: "Vídeo", image: "Imagem" };
+
+function fmtSize(b) {
+  if (!b) return "?";
+  const u = ["B","KB","MB","GB","TB"]; let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return b.toFixed(i ? 1 : 0) + " " + u[i];
+}
+
+async function loadSources() {
+  const list = await (await fetch("/api/sources")).json();
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem("sources")); } catch {}
+  $("#opts").innerHTML = list.map(s =>
+    `<label><input type="checkbox" name="src" value="${esc(s.id)}" ${!saved || saved.includes(s.id) ? "checked" : ""}> ${esc(s.name)}</label>`
+  ).join("") + `<label><input type="checkbox" id="hideRed"> Ocultar "Evitar"</label>`;
+}
+
+function card(r) {
+  const meta = [
+    `<span>${esc(r.source)}${r.also_on.length ? " + " + esc(r.also_on.join(", ")) : ""}</span>`,
+    `<span>${MEDIA[r.media_type]}</span>`,
+    `<span>${fmtSize(r.size)}</span>`,
+    r.seeders != null ? `<span>▲ ${r.seeders} seeders · ▼ ${r.leechers ?? "?"}</span>` : "",
+    r.uploader ? `<span>por ${esc(r.uploader)}</span>` : "",
+    r.added ? `<span>${new Date(r.added).toLocaleDateString("pt-BR")}</span>` : "",
+  ].join("");
+  const reasons = r.reasons.map(x =>
+    `<li class="${x.kind}">${x.points > 0 ? "+" : ""}${x.points ? x.points + " · " : ""}${esc(x.text)}</li>`).join("");
+  const files = r.files && r.files.length
+    ? `<details><summary>Arquivos (${r.files.length})</summary><div class="files">${
+        r.files.slice(0, 300).map(f => esc(f.name) + " — " + fmtSize(f.size)).join("<br>")}</div></details>` : "";
+  const links = [
+    r.magnet ? `<a href="${esc(r.magnet)}">Abrir magnet</a>` : "",
+    r.torrent_url ? `<a href="${esc(r.torrent_url)}">Baixar .torrent</a>` : "",
+    r.page_url ? `<a href="${esc(r.page_url)}" target="_blank" rel="noopener noreferrer">Ver no site</a>` : "",
+  ].join("");
+  return `<div class="card ${r.level}">
+    <div class="top"><span class="badge ${r.level}">${LABEL[r.level]} ${r.score}</span>
+      <div><div class="title">${esc(r.title)}</div><div class="meta">${meta}</div></div></div>
+    <details ${r.level === "red" ? "open" : ""}><summary>Por que essa nota?</summary><ul class="reasons">${reasons}</ul></details>
+    ${files}
+    <div class="actions">${links}</div>
+  </div>`;
+}
+
+$("#f").addEventListener("submit", async e => {
+  e.preventDefault();
+  const srcs = [...document.querySelectorAll("input[name=src]:checked")].map(i => i.value);
+  try { localStorage.setItem("sources", JSON.stringify(srcs)); } catch {}
+  const p = new URLSearchParams({ q: $("#q").value.trim() });
+  if ($("#media").value) p.set("media", $("#media").value);
+  if (srcs.length) p.set("sources", srcs.join(","));
+  if ($("#hideRed").checked) p.set("hide_red", "true");
+  $("#status").textContent = "Buscando e verificando arquivos…";
+  $("#results").innerHTML = "";
+  try {
+    const res = await fetch("/api/search?" + p);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    const errs = data.errors.map(x => `<div class="err">⚠ ${esc(x.source)}: ${esc(x.error)}</div>`).join("");
+    $("#status").innerHTML = `${data.count} resultado(s).` + errs;
+    $("#results").innerHTML = data.results.map(card).join("");
+  } catch (err) {
+    $("#status").innerHTML = `<span class="err">Erro: ${esc(err.message)}</span>`;
+  }
+});
+
+loadSources();
+</script>
+</body>
+</html>
